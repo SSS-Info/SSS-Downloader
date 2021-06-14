@@ -140,7 +140,8 @@ def get_transactions(_domain, subscriber_key, _start_date, _end_date, _session_i
 
 
 def log_error(errors):
-    file_object = open('error.log', 'a')
+    create_folder("logs")
+    file_object = open('logs/error.log', 'a')
     for error in errors:
         file_object.write(error)
     file_object.close()
@@ -329,13 +330,14 @@ def end_log():
 
 
 def log_and_print(messages, to_print=True):
-    file_object = open(f'log_{session_id}.html', 'a')
+    create_folder("logs")
+    file_object = open(f'logs/log_{session_id}.html', 'a')
     for message in messages:
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         message = message.encode("utf-8")
         file_object.write(f"<tr><td>{timestamp}</td><td>{message}</td></tr>")
         if to_print:
-            print(message)
+            print(str(message, 'utf-8'))
     file_object.close()
 
 
@@ -590,7 +592,7 @@ def get_start_end_date(_args, _opts):
             print("Error reading command line arguments)")
         else:
             print(f"from command line: {_days_ago} ")
-            _end_date = datetime.datetime.now().date() - datetime.timedelta(days=1)  # yesterday
+            _end_date = datetime.datetime.now().date() - datetime.timedelta(days=int(_days_ago))  # yesterday
             _start_date = _end_date - datetime.timedelta(days=int(_days_ago))
     elif "-w" in opts:
         # -w 0 means current week
@@ -651,15 +653,16 @@ if __name__ == "__main__":
     python main.py -h:                  Shows this help message
     python main.py -templates           Shows the list of available templates
     python main.py -customers           Shows the list of available customers
-    python main.py -dest c:\\temp\\SSS  Set destination folder
-    python main.py -t TEMPLATEKEY       Set the template key (e.g. )
+    python main.py -dest c:\\temp\\SSS  Set destination folder to c:\\temp\\SSS
+    python main.py -t TEMPLATEKEY       Set the template key (e.g. ahdzfnNob290LXN0b3JlLXNoYXJlLWRldnIwCxIKU3Vic2NyaWJlchiAgICAmZmNCgwLEgxGb3JtVGVtcGxhdGUYgICAgKG_nAkM)
     python main.py -s yyyymmdd          Set the start date 
     python main.py -e yyyymmdd          Set the end date
-    python main.py -d 0                 Set the duration to today
-    python main.py -day 1                 Set t
-    python main.py -day 1 --delete
-    
-    Example uses:
+    python main.py -s 20210101 -e 20210531  Download date range from 1 Jan 2021 to 31 May 2021
+    python main.py -d 0                 Set the duration to current day
+    python main.py -d 1                 Set the download period to yesterday
+    python main.py -m 1 --delete        Download last month data and move all downloaded tasks to SSS Recycle Bin
+    python main.py -m 2 --delete        Download two months ago data and move all downloaded tasks to SSS Recycle Bin
+
     """)
 
     elif "-templates" in opts:
@@ -669,7 +672,7 @@ if __name__ == "__main__":
 
     else:
         # load settings
-        output_folder = get_download_setting(args, opts, "-d", "folder", "C:\\temp")
+        output_folder = get_download_setting(args, opts, "-f", "folder", "C:\\temp")
         template_key = get_download_setting(args, opts, "-t", "template_key", None)
         customer_key = get_download_setting(args, opts, "-c", "customer_key", None)
         start_date, end_date = get_start_end_date(args, opts)
