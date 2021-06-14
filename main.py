@@ -574,7 +574,7 @@ def get_start_end_date(_args, _opts):
                 _end_date = datetime.datetime.strptime(_args[_opts.index("-e")], "%Y%m%d").date()
             else:
                 print("Read start and end date from ")
-                _end_date = _start_date
+                _end_date = datetime.datetime.now().date()
 
         except IndexError:
             print("Error reading command line arguments)")
@@ -653,7 +653,7 @@ if __name__ == "__main__":
     python main.py -h:                  Shows this help message
     python main.py -templates           Shows the list of available templates
     python main.py -customers           Shows the list of available customers
-    python main.py -dest c:\\temp\\SSS  Set destination folder to c:\\temp\\SSS
+    python main.py -f c:\\temp\\SSS     Set destination folder to c:\\temp\\SSS
     python main.py -t TEMPLATEKEY       Set the template key (e.g. ahdzfnNob290LXN0b3JlLXNoYXJlLWRldnIwCxIKU3Vic2NyaWJlchiAgICAmZmNCgwLEgxGb3JtVGVtcGxhdGUYgICAgKG_nAkM)
     python main.py -s yyyymmdd          Set the start date 
     python main.py -e yyyymmdd          Set the end date
