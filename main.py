@@ -187,8 +187,8 @@ def download_images(base_folder, all_tasks, save_excel_task=False, save_excel_da
     for task in all_tasks:
         # print(task)
         task_id = task['orderid']
-        customer = sanitize_filename(task["customer"])
-        template = sanitize_filename(task["template"])
+        customer = "".join(x for x in sanitize_filename(task["customer"]) if x.isalnum())
+        template = "".join(x for x in sanitize_filename(task["template"]) if x.isalnum())
         if template == "":
             template = "no_template"
 
@@ -197,10 +197,15 @@ def download_images(base_folder, all_tasks, save_excel_task=False, save_excel_da
         local_time = ts.strftime("%H%M%S")
         # print(ts)
 
-        destination_folder = (os.path.join(base_folder, customer, local_date, template, sanitize_filename(task_id)))
+        sanitzed_orderid = task_id.replace("/",",").replace("*","-").replace("°","-").replace("）",")").replace("（",")")
+        sanitzed_orderid = sanitize_filename(sanitzed_orderid)
+        if (len(sanitzed_orderid)) > 40:
+            sanitzed_orderid = sanitzed_orderid[0: 37] + "---"
+            print (task_id, sanitzed_orderid)
+        destination_folder = (os.path.join(base_folder, customer, local_date, sanitzed_orderid))
         create_folder(destination_folder)
         if save_excel_task:
-            xls_filename = os.path.join(destination_folder, sanitize_filename(task_id) + ".xlsx")
+            xls_filename = os.path.join(destination_folder, sanitzed_orderid + ".xlsx")
             create_excel(xls_filename, [task])
         if total_images > 0:
             percentage_done = 100 * completed_images / float(total_images)
@@ -218,7 +223,7 @@ def download_images(base_folder, all_tasks, save_excel_task=False, save_excel_da
         threads = []
         for image in task['images']:
             destination_file = os.path.join(
-                destination_folder, f"{str(image_index).zfill(3)}_{sanitize_filename(task_id)}_{local_time}.jpg")
+                destination_folder, f"{str(image_index).zfill(3)}_{sanitzed_orderid}_{local_time}.jpg")
             x = threading.Thread(target=download_image, args=(image, destination_file))
             threads.append(x)
             x.start()
@@ -309,7 +314,7 @@ def create_excel(filepath, tasks):
             workbook.close()
             xls_saved = True
         except FileCreateError:
-            print("Error saving file")
+            print("Error saving file " + filepath)
             input("Close file and press Enter to try again.")
         if xls_saved:
             break
