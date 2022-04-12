@@ -96,7 +96,8 @@ def get_subscriber_key(access_key, _domain):
         return False, False
 
 
-def get_transactions(_domain, subscriber_key, _start_date, _end_date, _session_id, _template_key=None, _customer_key=None):
+def get_transactions(_domain, subscriber_key, _start_date, _end_date, _session_id, _template_key=None, 
+                     _customer_key=None):
     data = {'subscriberKey': subscriber_key, 'access_key': SECURITY,
             'from_date': _start_date, 'to_date': _end_date, 'session_id': _session_id, 'templateKey': _template_key,
             'customerKey': _customer_key}
@@ -197,15 +198,15 @@ def download_images(base_folder, all_tasks, save_excel_task=False, save_excel_da
         local_time = ts.strftime("%H%M%S")
         # print(ts)
 
-        sanitzed_orderid = task_id.replace("/",",").replace("*","-").replace("°","-").replace("）",")").replace("（",")")
-        sanitzed_orderid = sanitize_filename(sanitzed_orderid)
-        if (len(sanitzed_orderid)) > 40:
-            sanitzed_orderid = sanitzed_orderid[0: 37] + "---"
-            print (task_id, sanitzed_orderid)
-        destination_folder = (os.path.join(base_folder, customer, local_date, sanitzed_orderid))
+        cleaned_order_id = task_id.replace("/", ",").replace("*", "-").replace("°", "-").replace("）", ")").replace("（", ")")
+        cleaned_order_id = sanitize_filename(cleaned_order_id)
+        if (len(cleaned_order_id)) > 40:
+            cleaned_order_id = cleaned_order_id[0: 37] + "---"
+            print (task_id, cleaned_order_id)
+        destination_folder = (os.path.join(base_folder, customer, local_date, cleaned_order_id))
         create_folder(destination_folder)
         if save_excel_task:
-            xls_filename = os.path.join(destination_folder, sanitzed_orderid + ".xlsx")
+            xls_filename = os.path.join(destination_folder, cleaned_order_id + ".xlsx")
             create_excel(xls_filename, [task])
         if total_images > 0:
             percentage_done = 100 * completed_images / float(total_images)
@@ -223,7 +224,7 @@ def download_images(base_folder, all_tasks, save_excel_task=False, save_excel_da
         threads = []
         for image in task['images']:
             destination_file = os.path.join(
-                destination_folder, f"{str(image_index).zfill(3)}_{sanitzed_orderid}_{local_time}.jpg")
+                destination_folder, f"{str(image_index).zfill(3)}_{cleaned_order_id}_{local_time}.jpg")
             x = threading.Thread(target=download_image, args=(image, destination_file))
             threads.append(x)
             x.start()
@@ -404,7 +405,8 @@ def check_token(deployment, subscriber_key):
         return False
 
 
-def download_data(_output_folder, _start_date, _end_date, _template_key, _customer_key, _delete=False):
+def download_data(_output_folder, _start_date, _end_date, _template_key, _customer_key, _delete=False,
+                  _no_photos=False, _excel_output=None):
     start_log()
     log_and_print([f"SSS Downloader version {VERSION}"])
 
@@ -477,39 +479,47 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                                              _end_date.strftime("%d/%m/%Y"), session_id, template_key, _customer_key)
 
                 if "all" in config_section_map("Data")['excel'].split(","):
-                    xls_filename = os.path.join(_output_folder,
-                                                "tasks_%s.xlsx" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+                    if _excel_output:
+                        xls_filename = os.path.join(_output_folder, _excel_output)
+                    else:
+                        xls_filename = os.path.join(_output_folder,
+                                                    "tasks_%s.xlsx" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
                     print("Saved Excel file containing all tasks to %s." % xls_filename)
                     create_excel(xls_filename, all_tasks)
 
                 save_excel_task = "task" in config_section_map("Data")['excel'].split(",")
                 save_excel_day = "day" in config_section_map("Data")['excel'].split(",")
 
-                completed_tasks, completed_images, completed_size = download_images(_output_folder, all_tasks,
-                                                                                    save_excel_task, save_excel_day)
+                if not _no_photos:
+                    completed_tasks, completed_images, completed_size = download_images(_output_folder, all_tasks,
+                                                                                        save_excel_task, save_excel_day)
 
-                message = "Downloaded %s tasks with in total %d photos (%s) to %s" % (
-                    completed_tasks, completed_images, human_bytes(completed_size),
-                    config_section_map("Download")['folder'])
-                log_and_print([message])
-                log_and_print(["Finished in %s" % get_time_stamp(overall_start_time)])
+                    message = "Downloaded %s tasks with in total %d photos (%s) to %s" % (
+                        completed_tasks, completed_images, human_bytes(completed_size),
+                        config_section_map("Download")['folder'])
+                    log_and_print([message])
+                    log_and_print(["Finished in %s" % get_time_stamp(overall_start_time)])
 
-                # delete
-                if _delete and len(all_tasks) > 0:
-                    task_keys = [o['key'] for o in all_tasks]
-                    task_keys = ",".join(task_keys)
-                    download_token = config_section_map("Subscriber")['download_token']
+                    # delete
+                    if _delete and len(all_tasks) > 0:
+                        task_keys = [o['key'] for o in all_tasks]
+                        task_keys = ",".join(task_keys)
+                        download_token = config_section_map("Subscriber")['download_token']
 
-                    data = dict(access_key=SECURITY,
-                                task_keys=task_keys, subscriber_key=subscriber_key, download_token=download_token)
-                    response = http.post(f"https://{deployment}.appspot.com/desktop/delete_orders", data).json()
+                        data = dict(access_key=SECURITY,
+                                    task_keys=task_keys, subscriber_key=subscriber_key, download_token=download_token)
+                        response = http.post(f"https://{deployment}.appspot.com/desktop/delete_orders", data).json()
 
-                    if response['status'] == "error":
-                        log_and_print([response['error']])
-                        _delete = False
-                    else:
-                        log_and_print(["Downloaded tasks and images will now be moved to the recycle bin"])
-
+                        if response['status'] == "error":
+                            log_and_print([response['error']])
+                            _delete = False
+                        else:
+                            log_and_print(["Downloaded tasks and images will now be moved to the recycle bin"])
+                else:
+                    completed_tasks = 0
+                    completed_images = 0
+                    completed_size = 0
+                    message = 'No photos downloaded'
                 end_log()
 
                 print()
@@ -667,6 +677,8 @@ if __name__ == "__main__":
     python main.py -d 1                 Set the download period to yesterday
     python main.py -m 1 --delete        Download last month data and move all downloaded tasks to SSS Recycle Bin
     python main.py -m 2 --delete        Download two months ago data and move all downloaded tasks to SSS Recycle Bin
+    python main.py -nophotos
+    python main.py -output c:\\temp\output.xlsx
 
     """)
 
@@ -680,10 +692,18 @@ if __name__ == "__main__":
         output_folder = get_download_setting(args, opts, "-f", "folder", "C:\\temp")
         template_key = get_download_setting(args, opts, "-t", "template_key", None)
         customer_key = get_download_setting(args, opts, "-c", "customer_key", None)
+
+        if "-nophotos" in opts:
+            no_photos = True
+        else:
+            no_photos = False
+
+        excel_output = get_download_setting(args, opts, "-output", "excel_output", None)
+
         start_date, end_date = get_start_end_date(args, opts)
 
         delete = "--delete" in opts
 
-        print(delete)
+        print(excel_output)
 
-        download_data(output_folder, start_date, end_date, template_key, customer_key, delete)
+        download_data(output_folder, start_date, end_date, template_key, customer_key, delete, no_photos, excel_output)
