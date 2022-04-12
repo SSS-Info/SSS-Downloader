@@ -677,8 +677,8 @@ if __name__ == "__main__":
     python main.py -d 1                 Set the download period to yesterday
     python main.py -m 1 --delete        Download last month data and move all downloaded tasks to SSS Recycle Bin
     python main.py -m 2 --delete        Download two months ago data and move all downloaded tasks to SSS Recycle Bin
-    python main.py -nophotos
-    python main.py -output c:\\temp\output.xlsx
+    python main.py -nophotos            Download Excel data only, skip photo download
+    python main.py -output output.xlsx  Custom Excel output file name
 
     """)
 
