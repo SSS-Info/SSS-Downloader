@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from calendar import monthrange
+import pandas as pd
 
 import requests
 import xlsxwriter
@@ -17,6 +18,7 @@ from xlsxwriter.exceptions import FileCreateError
 VERSION = 1.0
 session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 SECURITY = 'd5b3c5187a96753e17451478e6798424610c0f577cf7e3141efb0fee93d56aa7'
+excel_filename = ""
 
 overall_start_time = time.time()
 
@@ -253,6 +255,7 @@ def download_images(base_folder, all_tasks, save_excel_task=False, save_excel_da
 
 
 def create_excel(filepath, tasks):
+    excel_filename = filepath
     workbook = xlsxwriter.Workbook(filepath)
     worksheet = workbook.add_worksheet()
 
@@ -319,6 +322,12 @@ def create_excel(filepath, tasks):
             input("Close file and press Enter to try again.")
         if xls_saved:
             break
+
+
+def convert_xls_to_csv(excel_filename, csv_filename, separator):
+    print(f"Exported Excel to {csv_filename}")
+    xlsx_file = pd.read_excel(excel_filename, dtype=str, index_col=None)
+    xlsx_file.to_csv(csv_filename, header=True, sep=separator, index=False, encoding='utf-8')
 
 
 def start_log():
@@ -406,7 +415,7 @@ def check_token(deployment, subscriber_key):
 
 
 def download_data(_output_folder, _start_date, _end_date, _template_key, _customer_key, _delete=False,
-                  _no_photos=False, _excel_output=None):
+                  _no_photos=False, _excel_output=None, _csv_setting = False):
     start_log()
     log_and_print([f"SSS Downloader version {VERSION}"])
 
@@ -486,6 +495,8 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                                                     "tasks_%s.xlsx" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
                     print("Saved Excel file containing all tasks to %s." % xls_filename)
                     create_excel(xls_filename, all_tasks)
+                    if csv_setting:
+                        convert_xls_to_csv(xls_filename, xls_filename.replace(".xlsx", ".csv"), csv_setting)
 
                 save_excel_task = "task" in config_section_map("Data")['excel'].split(",")
                 save_excel_day = "day" in config_section_map("Data")['excel'].split(",")
@@ -679,6 +690,7 @@ if __name__ == "__main__":
     python main.py -m 2 --delete        Download two months ago data and move all downloaded tasks to SSS Recycle Bin
     python main.py -nophotos            Download Excel data only, skip photo download
     python main.py -output output.xlsx  Custom Excel output file name
+    python main.py -csv ;               Export to csv, delimiter is ;
 
     """)
 
@@ -705,5 +717,10 @@ if __name__ == "__main__":
         delete = "--delete" in opts
 
         print(excel_output)
+        csv_setting = get_download_setting(args, opts, "-csv", "csv", None)
 
-        download_data(output_folder, start_date, end_date, template_key, customer_key, delete, no_photos, excel_output)
+        download_data(output_folder, start_date, end_date, template_key, customer_key, delete, no_photos, excel_output, csv_setting)
+
+
+
+
