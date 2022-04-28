@@ -1,4 +1,4 @@
 call env\Scripts\activate.bat
-py main.py -nophotos
+py main.py
 
 call env\Scripts\deactivate.bat

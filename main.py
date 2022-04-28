@@ -5,7 +5,6 @@ import sys
 import threading
 import time
 from calendar import monthrange
-import pandas as pd
 
 import requests
 import xlsxwriter
@@ -98,7 +97,7 @@ def get_subscriber_key(access_key, _domain):
         return False, False
 
 
-def get_transactions(_domain, subscriber_key, _start_date, _end_date, _session_id, _template_key=None, 
+def get_transactions(_domain, subscriber_key, _start_date, _end_date, _session_id, _template_key=None,
                      _customer_key=None):
     data = {'subscriberKey': subscriber_key, 'access_key': SECURITY,
             'from_date': _start_date, 'to_date': _end_date, 'session_id': _session_id, 'templateKey': _template_key,
@@ -162,7 +161,7 @@ def download_image(image, destination_file):
         log_error([datetime.datetime.now().strftime("%d/%m/%Y %H:%M%:%S"), image + "\n", repr(e) + "\n\n"])
 
 
-def download_images(base_folder, all_tasks, save_excel_task=False, save_excel_day=False):
+def download_images(deployment, base_folder, all_tasks, save_excel_task=False, save_excel_day=False):
     total_images = 0
     completed_size = 0
     total_size = 0
@@ -191,20 +190,21 @@ def download_images(base_folder, all_tasks, save_excel_task=False, save_excel_da
         # print(task)
         task_id = task['orderid']
         customer = "".join(x for x in sanitize_filename(task["customer"]) if x.isalnum())
-        template = "".join(x for x in sanitize_filename(task["template"]) if x.isalnum())
-        if template == "":
-            template = "no_template"
+        # template = "".join(x for x in sanitize_filename(task["template"]) if x.isalnum())
+        # if template == "":
+        #     template = "no_template"
 
         ts = datetime.datetime.fromtimestamp(int(task["timestamp"]))
         local_date = ts.strftime("%Y%m%d")
         local_time = ts.strftime("%H%M%S")
         # print(ts)
 
-        cleaned_order_id = task_id.replace("/", ",").replace("*", "-").replace("°", "-").replace("）", ")").replace("（", ")")
+        cleaned_order_id = task_id.replace("/", ",").replace("*", "-").replace("°", "-").replace("）", ")") \
+            .replace("（", ")")
         cleaned_order_id = sanitize_filename(cleaned_order_id)
         if (len(cleaned_order_id)) > 40:
             cleaned_order_id = cleaned_order_id[0: 37] + "---"
-            print (task_id, cleaned_order_id)
+            print(task_id, cleaned_order_id)
         destination_folder = (os.path.join(base_folder, customer, local_date, cleaned_order_id))
         create_folder(destination_folder)
         if save_excel_task:
@@ -222,6 +222,9 @@ def download_images(base_folder, all_tasks, save_excel_task=False, save_excel_da
         log_and_print(["%s: %d/%d (%.1f%%) : Downloading task %s to %s, (%d %s, %s)... " %
                        (ts, completed_tasks + 1, len(all_tasks), percentage_done, task_id, destination_folder,
                         len(task['images']), strPhotos, human_bytes(task['imageSize']))], to_print=False)
+
+        download_pdf(deployment, task['key'], destination_folder, cleaned_order_id)
+
         image_index = 1
         threads = []
         for image in task['images']:
@@ -255,7 +258,7 @@ def download_images(base_folder, all_tasks, save_excel_task=False, save_excel_da
 
 
 def create_excel(filepath, tasks):
-    excel_filename = filepath
+    # excel_filename = filepath
     workbook = xlsxwriter.Workbook(filepath)
     worksheet = workbook.add_worksheet()
 
@@ -263,6 +266,8 @@ def create_excel(filepath, tasks):
                   "Image Size", "Num Images", "Template", "Lat", "Lng", "Address"]
 
     expando_task = []
+
+    maxNumImages = 0
 
     for task in tasks:
         expando_properties = {}
@@ -273,7 +278,10 @@ def create_excel(filepath, tasks):
                 header_row.append(uc_first_property)
                 expando_task.append(expando_property)
 
-    header_row.append("Images")
+        maxNumImages = max(maxNumImages, len(task['images']))
+
+    for i in range(0, maxNumImages):
+        header_row.append(f"Image {i + 1}")
 
     worksheet.write_row(0, 0, header_row)
     row_index = 1
@@ -322,12 +330,6 @@ def create_excel(filepath, tasks):
             input("Close file and press Enter to try again.")
         if xls_saved:
             break
-
-
-def convert_xls_to_csv(excel_filename, csv_filename, separator):
-    print(f"Exported Excel to {csv_filename}")
-    xlsx_file = pd.read_excel(excel_filename, dtype=str, index_col=None)
-    xlsx_file.to_csv(csv_filename, header=True, sep=separator, index=False, encoding='utf-8')
 
 
 def start_log():
@@ -414,8 +416,17 @@ def check_token(deployment, subscriber_key):
         return False
 
 
+def download_pdf(deployment, task_key, folder, task_id):
+    request = http.get(f"https://{deployment}.appspot.com/subscriber/export_pdf?task_key={task_key}")
+    cleaned_order_id = task_id.replace("/", ",").replace("*", "-").replace("°", "-").replace("）", ")").replace("（", ")")
+    cleaned_order_id = sanitize_filename(cleaned_order_id)
+
+    pdf_filename = os.path.join(folder, cleaned_order_id + ".pdf")
+    open(pdf_filename, 'wb').write(request.content)
+
+
 def download_data(_output_folder, _start_date, _end_date, _template_key, _customer_key, _delete=False,
-                  _no_photos=False, _excel_output=None, _csv_setting = False):
+                  _no_photos=False, _excel_output=None):
     start_log()
     log_and_print([f"SSS Downloader version {VERSION}"])
 
@@ -458,29 +469,29 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                     print("Download data speed will not be correct.")
                 print()
 
-                if _template_key:
-                    data = dict(access_key=SECURITY,
-                                templateKey=_template_key, subscriber_key=subscriber_key)
-                    templateResult = http.post(f"https://{deployment}.appspot.com/desktop/get_templates", data).json()
-                    if templateResult['status'] == "ok":
-                        template = templateResult['templates'][0]['name']
-                    else:
-                        template = "all"
-                else:
-                    template = "all"
+                # if _template_key:
+                #     data = dict(access_key=SECURITY,
+                #                 templateKey=_template_key, subscriber_key=subscriber_key)
+                #     templateResult = http.post(f"https://{deployment}.appspot.com/desktop/get_templates", data).json()
+                #     if templateResult['status'] == "ok":
+                #         template = templateResult['templates'][0]['name']
+                #     else:
+                #         template = "all"
+                # else:
+                #     template = "all"
+                #
+                # if _customer_key:
+                #     data = dict(access_key=SECURITY,
+                #                 customerKey=_customer_key, subscriber_key=subscriber_key)
+                #     templateResult = http.post(f"https://{deployment}.appspot.com/desktop/get_customers", data).json()
+                #     if templateResult['status'] == "ok":
+                #         customer = templateResult['customers'][0]['name']
+                #     else:
+                #         customer = "all"
+                # else:
+                #     customer = "all"
 
-                if _customer_key:
-                    data = dict(access_key=SECURITY,
-                                customerKey=_customer_key, subscriber_key=subscriber_key)
-                    templateResult = http.post(f"https://{deployment}.appspot.com/desktop/get_customers", data).json()
-                    if templateResult['status'] == "ok":
-                        customer = templateResult['customers'][0]['name']
-                    else:
-                        customer = "all"
-                else:
-                    customer = "all"
-
-                print(f"Template: {template}")
+                # print(f"Template: {template}")
 
                 print("Loading transaction list")
 
@@ -495,15 +506,14 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                                                     "tasks_%s.xlsx" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
                     print("Saved Excel file containing all tasks to %s." % xls_filename)
                     create_excel(xls_filename, all_tasks)
-                    if csv_setting:
-                        convert_xls_to_csv(xls_filename, xls_filename.replace(".xlsx", ".csv"), csv_setting)
 
                 save_excel_task = "task" in config_section_map("Data")['excel'].split(",")
                 save_excel_day = "day" in config_section_map("Data")['excel'].split(",")
 
                 if not _no_photos:
-                    completed_tasks, completed_images, completed_size = download_images(_output_folder, all_tasks,
-                                                                                        save_excel_task, save_excel_day)
+                    completed_tasks, completed_images, completed_size = download_images(deployment, _output_folder,
+                                                                                        all_tasks, save_excel_task,
+                                                                                        save_excel_day)
 
                     message = "Downloaded %s tasks with in total %d photos (%s) to %s" % (
                         completed_tasks, completed_images, human_bytes(completed_size),
@@ -631,7 +641,7 @@ def get_start_end_date(_args, _opts):
             print(f"from command line: {_weeks_ago} ")
             # if w 0, then this week, that
             _start_date = (datetime.datetime.today() - datetime.timedelta(
-                days=datetime.datetime.today().isoweekday() % 7 + (7 * int(_weeks_ago))-1)).date()
+                days=datetime.datetime.today().isoweekday() % 7 + (7 * int(_weeks_ago)) - 1)).date()
             _end_date = _start_date + datetime.timedelta(days=6)
 
     elif "-m" in opts:
@@ -680,7 +690,7 @@ if __name__ == "__main__":
     python main.py -templates           Shows the list of available templates
     python main.py -customers           Shows the list of available customers
     python main.py -f c:\\temp\\SSS     Set destination folder to c:\\temp\\SSS
-    python main.py -t TEMPLATEKEY       Set the template key (e.g. ahdzfnNob290LXN0b3JlLXNoYXJlLWRldnIwCxIKU3Vic2NyaWJlchiAgICAmZmNCgwLEgxGb3JtVGVtcGxhdGUYgICAgKG_nAkM)
+    python main.py -t TEMPLATEKEY       Set the template key (e.g. ahdzfnNob290...UYgICAgKG_nAkM)
     python main.py -s yyyymmdd          Set the start date 
     python main.py -e yyyymmdd          Set the end date
     python main.py -s 20210101 -e 20210531  Download date range from 1 Jan 2021 to 31 May 2021
@@ -690,7 +700,6 @@ if __name__ == "__main__":
     python main.py -m 2 --delete        Download two months ago data and move all downloaded tasks to SSS Recycle Bin
     python main.py -nophotos            Download Excel data only, skip photo download
     python main.py -output output.xlsx  Custom Excel output file name
-    python main.py -csv ;               Export to csv, delimiter is ;
 
     """)
 
@@ -716,11 +725,4 @@ if __name__ == "__main__":
 
         delete = "--delete" in opts
 
-        print(excel_output)
-        csv_setting = get_download_setting(args, opts, "-csv", "csv", None)
-
-        download_data(output_folder, start_date, end_date, template_key, customer_key, delete, no_photos, excel_output, csv_setting)
-
-
-
-
+        download_data(output_folder, start_date, end_date, template_key, customer_key, delete, no_photos, excel_output)
