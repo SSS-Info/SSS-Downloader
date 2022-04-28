@@ -1,4 +1,4 @@
-@echo off
+ac@echo off
 py --version
 py -m pip install virtualenv
 py -m venv env
