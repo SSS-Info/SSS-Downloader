@@ -13,26 +13,27 @@ from pathvalidate import sanitize_filename
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 from xlsxwriter.exceptions import FileCreateError
+import ssl
+import certifi
+from urllib.request import urlopen
 
 VERSION = 1.0
 session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 SECURITY = 'd5b3c5187a96753e17451478e6798424610c0f577cf7e3141efb0fee93d56aa7'
 excel_filename = ""
 
+
 overall_start_time = time.time()
 
 retry_strategy = Retry(
     total=5,
     status_forcelist=[429, 500, 502, 503, 504],
-    allowed_methods=["HEAD", "GET", "OPTIONS"],
+    # allowed_methods=frozenset({"HEAD", "GET", "OPTIONS"}),
     backoff_factor=1
 )
 adapter = HTTPAdapter(max_retries=retry_strategy)
 http = requests.Session()
 http.mount("https://", adapter)
-
-
-# http.mount("http://", adapter)
 
 
 def get_time_stamp(start):
@@ -161,7 +162,8 @@ def download_image(image, destination_file):
         log_error([datetime.datetime.now().strftime("%d/%m/%Y %H:%M%:%S"), image + "\n", repr(e) + "\n\n"])
 
 
-def download_images(deployment, base_folder, all_tasks, save_excel_task=False, save_excel_day=False):
+def download_images(deployment, base_folder, all_tasks, save_excel_task=False, save_excel_day=False,
+                    _download_pdf=False, _download_photos=False):
     total_images = 0
     completed_size = 0
     total_size = 0
@@ -216,43 +218,46 @@ def download_images(deployment, base_folder, all_tasks, save_excel_task=False, s
             percentage_done = 100
         ts = get_time_stamp(overall_start_time)
         strPhotos = "photo" if len(task['images']) == 1 else "photos"
-        print("%s: %d/%d (%.1f%%) : Downloading task %s to %s, (%d %s, %s)... " %
-              (ts, completed_tasks + 1, len(all_tasks), percentage_done, task_id, destination_folder,
-               len(task['images']), strPhotos, human_bytes(task['imageSize'])), end="", flush=True)
-        log_and_print(["%s: %d/%d (%.1f%%) : Downloading task %s to %s, (%d %s, %s)... " %
-                       (ts, completed_tasks + 1, len(all_tasks), percentage_done, task_id, destination_folder,
-                        len(task['images']), strPhotos, human_bytes(task['imageSize']))], to_print=False)
 
-        download_pdf(deployment, task['key'], destination_folder, cleaned_order_id)
+        if _download_pdf:
+            download_pdf(deployment, task['key'], destination_folder, cleaned_order_id)
 
-        image_index = 1
-        threads = []
-        for image in task['images']:
-            destination_file = os.path.join(
-                destination_folder, f"{str(image_index).zfill(3)}_{cleaned_order_id}_{local_time}.jpg")
-            x = threading.Thread(target=download_image, args=(image, destination_file))
-            threads.append(x)
-            x.start()
-            image_index += 1
+        if _download_photos:
+            print("%s: %d/%d (%.1f%%) : Downloading task %s to %s, (%d %s, %s)... " %
+                  (ts, completed_tasks + 1, len(all_tasks), percentage_done, task_id, destination_folder,
+                   len(task['images']), strPhotos, human_bytes(task['imageSize'])), end="", flush=True)
+            log_and_print(["%s: %d/%d (%.1f%%) : Downloading task %s to %s, (%d %s, %s)... " %
+                           (ts, completed_tasks + 1, len(all_tasks), percentage_done, task_id, destination_folder,
+                            len(task['images']), strPhotos, human_bytes(task['imageSize']))], to_print=False)
 
-        completed_images += len(task['images'])
-        completed_size += task['imageSize']
+            image_index = 1
+            threads = []
+            for image in task['images']:
+                destination_file = os.path.join(
+                    destination_folder, f"{str(image_index).zfill(3)}_{cleaned_order_id}_{local_time}.jpg")
+                x = threading.Thread(target=download_image, args=(image, destination_file))
+                threads.append(x)
+                x.start()
+                image_index += 1
 
-        for index, thread in enumerate(threads):
-            thread.join()
+            completed_images += len(task['images'])
+            completed_size += task['imageSize']
 
-        completed_tasks += 1
-        end_time = time.time()
-        download_speed = (completed_size / 1000000) / (end_time - start_time)
-        if completed_images > 0:
-            total_time = (total_images / float(completed_images) * (end_time - start_time))
-        else:
-            total_time = (end_time - start_time)
-        time_remaining = total_time - (end_time - start_time)
-        time_remaining_formatted = str(datetime.timedelta(seconds=time_remaining)).split(".")[0]
+            for index, thread in enumerate(threads):
+                thread.join()
 
-        print("Done (Downloaded %s @ %.1f MB/s, est time remaining: %s)" %
-              (human_bytes(completed_size), download_speed, time_remaining_formatted))
+            completed_tasks += 1
+            end_time = time.time()
+            download_speed = (completed_size / 1000000) / (end_time - start_time)
+            if completed_images > 0:
+                total_time = (total_images / float(completed_images) * (end_time - start_time))
+            else:
+                total_time = (end_time - start_time)
+            time_remaining = total_time - (end_time - start_time)
+            time_remaining_formatted = str(datetime.timedelta(seconds=time_remaining)).split(".")[0]
+
+            print("Done (Downloaded %s @ %.1f MB/s, est time remaining: %s)" %
+                  (human_bytes(completed_size), download_speed, time_remaining_formatted))
 
     return completed_tasks, completed_images, completed_size
 
@@ -423,10 +428,11 @@ def download_pdf(deployment, task_key, folder, task_id):
 
     pdf_filename = os.path.join(folder, cleaned_order_id + ".pdf")
     open(pdf_filename, 'wb').write(request.content)
+    log_and_print([f"PDF for task {task_id} downloaded to {pdf_filename}"])
 
 
 def download_data(_output_folder, _start_date, _end_date, _template_key, _customer_key, _delete=False,
-                  _no_photos=False, _excel_output=None):
+                  _no_photos=False, _excel_output=None, _pdf_download=False):
     start_log()
     log_and_print([f"SSS Downloader version {VERSION}"])
 
@@ -446,6 +452,8 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
         log_and_print(["Downloading Complete report. Stored in %s" % _output_folder])
     if "task" in reports:
         log_and_print(["Downloading Individual reports. Stored in each task folder"])
+    if _pdf_download:
+        log_and_print(["Downloading PDF. Stored in each task folder"])
     print()
 
     print("Getting domain", end="", flush=True)
@@ -510,37 +518,42 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                 save_excel_task = "task" in config_section_map("Data")['excel'].split(",")
                 save_excel_day = "day" in config_section_map("Data")['excel'].split(",")
 
-                if not _no_photos:
-                    completed_tasks, completed_images, completed_size = download_images(deployment, _output_folder,
-                                                                                        all_tasks, save_excel_task,
-                                                                                        save_excel_day)
+                download_photos = not _no_photos
 
+                completed_tasks, completed_images, completed_size = download_images(deployment, _output_folder,
+                                                                                    all_tasks, save_excel_task,
+                                                                                    save_excel_day, _pdf_download,
+                                                                                    download_photos)
+
+                if download_photos:
                     message = "Downloaded %s tasks with in total %d photos (%s) to %s" % (
                         completed_tasks, completed_images, human_bytes(completed_size),
                         config_section_map("Download")['folder'])
                     log_and_print([message])
                     log_and_print(["Finished in %s" % get_time_stamp(overall_start_time)])
-
-                    # delete
-                    if _delete and len(all_tasks) > 0:
-                        task_keys = [o['key'] for o in all_tasks]
-                        task_keys = ",".join(task_keys)
-                        download_token = config_section_map("Subscriber")['download_token']
-
-                        data = dict(access_key=SECURITY,
-                                    task_keys=task_keys, subscriber_key=subscriber_key, download_token=download_token)
-                        response = http.post(f"https://{deployment}.appspot.com/desktop/delete_orders", data).json()
-
-                        if response['status'] == "error":
-                            log_and_print([response['error']])
-                            _delete = False
-                        else:
-                            log_and_print(["Downloaded tasks and images will now be moved to the recycle bin"])
                 else:
-                    completed_tasks = 0
-                    completed_images = 0
-                    completed_size = 0
-                    message = 'No photos downloaded'
+                    message = "Process done"
+
+                # delete
+                if _delete and len(all_tasks) > 0:
+                    task_keys = [o['key'] for o in all_tasks]
+                    task_keys = ",".join(task_keys)
+                    download_token = config_section_map("Subscriber")['download_token']
+
+                    data = dict(access_key=SECURITY,
+                                task_keys=task_keys, subscriber_key=subscriber_key, download_token=download_token)
+                    response = http.post(f"https://{deployment}.appspot.com/desktop/delete_orders", data).json()
+
+                    if response['status'] == "error":
+                        log_and_print([response['error']])
+                        _delete = False
+                    else:
+                        log_and_print(["Downloaded tasks and images will now be moved to the recycle bin"])
+                # else:
+                #     completed_tasks = 0
+                #     completed_images = 0
+                #     completed_size = 0
+                #     message = 'No photos downloaded'
                 end_log()
 
                 print()
@@ -684,6 +697,9 @@ if __name__ == "__main__":
     opts = [opt for opt in sys.argv[1:] if opt.startswith("-")]
     args = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
 
+    print(opts)
+    print(args)
+
     if "-h" in opts:
         print("""Usage:
     python main.py -h:                  Shows this help message
@@ -700,6 +716,7 @@ if __name__ == "__main__":
     python main.py -m 2 --delete        Download two months ago data and move all downloaded tasks to SSS Recycle Bin
     python main.py -nophotos            Download Excel data only, skip photo download
     python main.py -output output.xlsx  Custom Excel output file name
+    python main.py -pdf              Enable PDF download for task
 
     """)
 
@@ -710,14 +727,15 @@ if __name__ == "__main__":
 
     else:
         # load settings
+        test = get_download_setting(args, opts, "-pdf", "download_pdf", "no").lower()
+        print(test)
         output_folder = get_download_setting(args, opts, "-f", "folder", "C:\\temp")
         template_key = get_download_setting(args, opts, "-t", "template_key", None)
         customer_key = get_download_setting(args, opts, "-c", "customer_key", None)
+        # download_pdf_setting = (get_download_setting(args, opts, "-pdf", "download_pdf", "no").lower() == "yes")
 
-        if "-nophotos" in opts:
-            no_photos = True
-        else:
-            no_photos = False
+        no_photos = ("-nophotos" in opts)
+        download_pdf_setting = "-pdf" in opts
 
         excel_output = get_download_setting(args, opts, "-output", "excel_output", None)
 
@@ -725,4 +743,5 @@ if __name__ == "__main__":
 
         delete = "--delete" in opts
 
-        download_data(output_folder, start_date, end_date, template_key, customer_key, delete, no_photos, excel_output)
+        download_data(output_folder, start_date, end_date, template_key, customer_key, delete, no_photos, excel_output,
+                      download_pdf_setting)
