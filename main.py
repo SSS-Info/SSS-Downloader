@@ -162,6 +162,29 @@ def download_image(image, destination_file):
         log_error([datetime.datetime.now().strftime("%d/%m/%Y %H:%M%:%S"), image + "\n", repr(e) + "\n\n"])
 
 
+def build_folder(base_folder, task, relative=False):
+    task_id = task['orderid']
+    customer = "".join(x for x in sanitize_filename(task["customer"]) if x.isalnum())
+    # template = "".join(x for x in sanitize_filename(task["template"]) if x.isalnum())
+    # if template == "":
+    #     template = "no_template"
+
+    ts = datetime.datetime.fromtimestamp(int(task["timestamp"]))
+    local_date = ts.strftime("%Y%m%d")
+
+    cleaned_order_id = task_id.replace("/", ",").replace("*", "-").replace("°", "-").replace("）", ")") \
+        .replace("（", ")")
+    cleaned_order_id = sanitize_filename(cleaned_order_id)
+    if (len(cleaned_order_id)) > 40:
+        cleaned_order_id = cleaned_order_id[0: 37] + "---"
+        print(task_id, cleaned_order_id)
+    if relative:
+        destination_folder = (os.path.join(customer, local_date, cleaned_order_id))
+    else:
+        destination_folder = (os.path.join(base_folder, customer, local_date, cleaned_order_id))
+    return destination_folder, cleaned_order_id
+
+
 def download_images(deployment, base_folder, all_tasks, save_excel_task=False, save_excel_day=False,
                     _download_pdf=False, _download_photos=False):
     total_images = 0
@@ -191,23 +214,11 @@ def download_images(deployment, base_folder, all_tasks, save_excel_task=False, s
     for task in all_tasks:
         # print(task)
         task_id = task['orderid']
-        customer = "".join(x for x in sanitize_filename(task["customer"]) if x.isalnum())
-        # template = "".join(x for x in sanitize_filename(task["template"]) if x.isalnum())
-        # if template == "":
-        #     template = "no_template"
-
         ts = datetime.datetime.fromtimestamp(int(task["timestamp"]))
-        local_date = ts.strftime("%Y%m%d")
         local_time = ts.strftime("%H%M%S")
-        # print(ts)
 
-        cleaned_order_id = task_id.replace("/", ",").replace("*", "-").replace("°", "-").replace("）", ")") \
-            .replace("（", ")")
-        cleaned_order_id = sanitize_filename(cleaned_order_id)
-        if (len(cleaned_order_id)) > 40:
-            cleaned_order_id = cleaned_order_id[0: 37] + "---"
-            print(task_id, cleaned_order_id)
-        destination_folder = (os.path.join(base_folder, customer, local_date, cleaned_order_id))
+        destination_folder, cleaned_order_id = build_folder(base_folder, task)
+
         create_folder(destination_folder)
         if save_excel_task:
             xls_filename = os.path.join(destination_folder, cleaned_order_id + ".xlsx")
@@ -216,11 +227,13 @@ def download_images(deployment, base_folder, all_tasks, save_excel_task=False, s
             percentage_done = 100 * completed_images / float(total_images)
         else:
             percentage_done = 100
-        ts = get_time_stamp(overall_start_time)
+
         strPhotos = "photo" if len(task['images']) == 1 else "photos"
 
         if _download_pdf:
-            download_pdf(deployment, task['key'], destination_folder, cleaned_order_id)
+            download_pdf(deployment, task['key'], destination_folder, cleaned_order_id, ts)
+
+        ts = get_time_stamp(overall_start_time)
 
         if _download_photos:
             print("%s: %d/%d (%.1f%%) : Downloading task %s to %s, (%d %s, %s)... " %
@@ -262,13 +275,16 @@ def download_images(deployment, base_folder, all_tasks, save_excel_task=False, s
     return completed_tasks, completed_images, completed_size
 
 
-def create_excel(filepath, tasks):
+def create_excel(filepath, tasks, base_folder="", folder_column=False):
     # excel_filename = filepath
     workbook = xlsxwriter.Workbook(filepath)
     worksheet = workbook.add_worksheet()
 
     header_row = ["ID", "Create Date", "Create Time", "Upload Date", "Upload Time", "Duration", "Operator", "Customer",
                   "Image Size", "Num Images", "Template", "Lat", "Lng", "Address"]
+
+    if folder_column:
+        header_row.append("Folder")
 
     expando_task = []
 
@@ -304,6 +320,11 @@ def create_excel(filepath, tasks):
         row = [task['orderid'], created_date, created_time, uploaded_local_date, uploaded_local_time, duration,
                task['operator'], task['customer'], human_bytes(task['imageSize']), str(len(task['images'])),
                task['template'], str(task["lat"]), str(task["lng"]), task["location"]]
+
+        if folder_column:
+            folder, filename = build_folder(base_folder, task, True)
+            formula = '=HYPERLINK("' + folder + '", "' + task['orderid'] + '")'
+            row.append(formula)
 
         for expando in expando_task:
             if expando in task['expandoproperties']:
@@ -421,12 +442,15 @@ def check_token(deployment, subscriber_key):
         return False
 
 
-def download_pdf(deployment, task_key, folder, task_id):
+def download_pdf(deployment, task_key, folder, task_id, ts):
     request = http.get(f"https://{deployment}.appspot.com/subscriber/export_pdf?task_key={task_key}")
     cleaned_order_id = task_id.replace("/", ",").replace("*", "-").replace("°", "-").replace("）", ")").replace("（", ")")
     cleaned_order_id = sanitize_filename(cleaned_order_id)
 
-    pdf_filename = os.path.join(folder, cleaned_order_id + ".pdf")
+    local_date = ts.strftime("%Y%m%d")
+    local_time = ts.strftime("%H%M%S")
+
+    pdf_filename = os.path.join(folder, cleaned_order_id + "_" + local_date + "_" + local_time + ".pdf")
     open(pdf_filename, 'wb').write(request.content)
     log_and_print([f"PDF for task {task_id} downloaded to {pdf_filename}"])
 
@@ -476,31 +500,6 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                         "longest_side"])
                     print("Download data speed will not be correct.")
                 print()
-
-                # if _template_key:
-                #     data = dict(access_key=SECURITY,
-                #                 templateKey=_template_key, subscriber_key=subscriber_key)
-                #     templateResult = http.post(f"https://{deployment}.appspot.com/desktop/get_templates", data).json()
-                #     if templateResult['status'] == "ok":
-                #         template = templateResult['templates'][0]['name']
-                #     else:
-                #         template = "all"
-                # else:
-                #     template = "all"
-                #
-                # if _customer_key:
-                #     data = dict(access_key=SECURITY,
-                #                 customerKey=_customer_key, subscriber_key=subscriber_key)
-                #     templateResult = http.post(f"https://{deployment}.appspot.com/desktop/get_customers", data).json()
-                #     if templateResult['status'] == "ok":
-                #         customer = templateResult['customers'][0]['name']
-                #     else:
-                #         customer = "all"
-                # else:
-                #     customer = "all"
-
-                # print(f"Template: {template}")
-
                 print("Loading transaction list")
 
                 all_tasks = get_transactions(deployment, subscriber_key, _start_date.strftime("%d/%m/%Y"),
@@ -513,7 +512,7 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                         xls_filename = os.path.join(_output_folder,
                                                     "tasks_%s.xlsx" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
                     print("Saved Excel file containing all tasks to %s." % xls_filename)
-                    create_excel(xls_filename, all_tasks)
+                    create_excel(xls_filename, all_tasks, _output_folder, True)
 
                 save_excel_task = "task" in config_section_map("Data")['excel'].split(",")
                 save_excel_day = "day" in config_section_map("Data")['excel'].split(",")
