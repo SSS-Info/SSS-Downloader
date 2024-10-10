@@ -1,8 +1,8 @@
+import concurrent.futures
 import configparser
 import datetime
 import os
 import sys
-import threading
 import time
 from calendar import monthrange
 
@@ -11,24 +11,20 @@ import xlsxwriter
 from dateutil.relativedelta import relativedelta
 from pathvalidate import sanitize_filename
 from requests.adapters import HTTPAdapter
+from tqdm import tqdm
 from urllib3 import Retry
 from xlsxwriter.exceptions import FileCreateError
-import ssl
-import certifi
-from urllib.request import urlopen
 
 VERSION = 1.0
 session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 SECURITY = 'd5b3c5187a96753e17451478e6798424610c0f577cf7e3141efb0fee93d56aa7'
 excel_filename = ""
 
-
 overall_start_time = time.time()
 
 retry_strategy = Retry(
     total=5,
     status_forcelist=[429, 500, 502, 503, 504],
-    # allowed_methods=frozenset({"HEAD", "GET", "OPTIONS"}),
     backoff_factor=1
 )
 adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -113,10 +109,6 @@ def get_transactions(_domain, subscriber_key, _start_date, _end_date, _session_i
     received_tasks = 0
     total_size = 0
     while more:
-        # plainResponse = http.post(url, data)
-
-        # print(plainResponse.content)
-
         response = http.post(url, data).json()
 
         total_size += response['totalSize']
@@ -150,24 +142,22 @@ def log_error(errors):
     file_object.close()
 
 
-def download_image(image, destination_file):
-    # print(image)
+def download_image(image, destination_file, pbar=None):
     try:
-        # completed_images += 1
         url = image['url'] + "=s" + config_section_map("Download")["longest_side"]
-        # completed_size += image['size']
         r = http.get(url, allow_redirects=True)
-        open(destination_file, 'wb').write(r.content)
+        with open(destination_file, 'wb') as f:
+            f.write(r.content)
     except Exception as e:
-        log_error([datetime.datetime.now().strftime("%d/%m/%Y %H:%M%:%S"), image + "\n", repr(e) + "\n\n"])
+        log_error([datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S"), str(image) + "\n", repr(e) + "\n\n"])
+    finally:
+        if pbar:
+            pbar.update(1)
 
 
 def build_folder(base_folder, task, relative=False):
     task_id = task['orderid']
     customer = "".join(x for x in sanitize_filename(task["customer"]) if x.isalnum())
-    # template = "".join(x for x in sanitize_filename(task["template"]) if x.isalnum())
-    # if template == "":
-    #     template = "no_template"
 
     ts = datetime.datetime.fromtimestamp(int(task["timestamp"]))
     local_date = ts.strftime("%Y%m%d")
@@ -193,7 +183,7 @@ def download_images(deployment, base_folder, all_tasks, save_excel_task=False, s
     completed_images = 0
     completed_tasks = 0
 
-    # count images + size
+    # Count images and size
     tasks_per_day = {}
     for task in all_tasks:
         if save_excel_day:
@@ -211,8 +201,11 @@ def download_images(deployment, base_folder, all_tasks, save_excel_task=False, s
             create_excel(xls_file, v)
 
     start_time = time.time()
+
+    if _download_photos:
+        image_pbar = tqdm(total=total_images, leave=True)
+
     for task in all_tasks:
-        # print(task)
         task_id = task['orderid']
         ts = datetime.datetime.fromtimestamp(int(task["timestamp"]))
         local_time = ts.strftime("%H%M%S")
@@ -223,60 +216,43 @@ def download_images(deployment, base_folder, all_tasks, save_excel_task=False, s
         if save_excel_task:
             xls_filename = os.path.join(destination_folder, cleaned_order_id + ".xlsx")
             create_excel(xls_filename, [task])
-        if total_images > 0:
-            percentage_done = 100 * completed_images / float(total_images)
-        else:
-            percentage_done = 100
-
-        strPhotos = "photo" if len(task['images']) == 1 else "photos"
 
         if _download_pdf:
             download_pdf(deployment, task['key'], destination_folder, cleaned_order_id, ts)
 
-        ts = get_time_stamp(overall_start_time)
-
-        if _download_photos:
-            print("%s: %d/%d (%.1f%%) : Downloading task %s to %s, (%d %s, %s)... " %
-                  (ts, completed_tasks + 1, len(all_tasks), percentage_done, task_id, destination_folder,
-                   len(task['images']), strPhotos, human_bytes(task['imageSize'])), end="", flush=True)
-            log_and_print(["%s: %d/%d (%.1f%%) : Downloading task %s to %s, (%d %s, %s)... " %
-                           (ts, completed_tasks + 1, len(all_tasks), percentage_done, task_id, destination_folder,
-                            len(task['images']), strPhotos, human_bytes(task['imageSize']))], to_print=False)
-
+        if _download_photos and len(task['images']) > 0:
+            images = task['images']
             image_index = 1
-            threads = []
-            for image in task['images']:
+            destination_files = []
+            for image in images:
                 destination_file = os.path.join(
                     destination_folder, f"{str(image_index).zfill(3)}_{cleaned_order_id}_{local_time}.jpg")
-                x = threading.Thread(target=download_image, args=(image, destination_file))
-                threads.append(x)
-                x.start()
+                destination_files.append(destination_file)
                 image_index += 1
 
-            completed_images += len(task['images'])
+            # Update the progress bar postfix with the task ID
+            image_pbar.set_postfix_str(f"Task {task_id}")
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = []
+                for image, dest_file in zip(images, destination_files):
+                    futures.append(executor.submit(download_image, image, dest_file, image_pbar))
+
+                # Wait for the images of this task to finish downloading
+                concurrent.futures.wait(futures)
+
+            completed_images += len(images)
             completed_size += task['imageSize']
 
-            for index, thread in enumerate(threads):
-                thread.join()
+        completed_tasks += 1
 
-            completed_tasks += 1
-            end_time = time.time()
-            download_speed = (completed_size / 1000000) / (end_time - start_time)
-            if completed_images > 0:
-                total_time = (total_images / float(completed_images) * (end_time - start_time))
-            else:
-                total_time = (end_time - start_time)
-            time_remaining = total_time - (end_time - start_time)
-            time_remaining_formatted = str(datetime.timedelta(seconds=time_remaining)).split(".")[0]
-
-            print("Done (Downloaded %s @ %.1f MB/s, est time remaining: %s)" %
-                  (human_bytes(completed_size), download_speed, time_remaining_formatted))
+    if _download_photos:
+        image_pbar.close()
 
     return completed_tasks, completed_images, completed_size
 
 
 def create_excel(filepath, tasks, base_folder="", folder_column=False):
-    # excel_filename = filepath
     workbook = xlsxwriter.Workbook(filepath)
     worksheet = workbook.add_worksheet()
 
@@ -308,7 +284,6 @@ def create_excel(filepath, tasks, base_folder="", folder_column=False):
     row_index = 1
 
     for task in tasks:
-        # create basic columns
         if "finalizedTS" in task:
             uploaded_local_date, uploaded_local_time = task['finalizedTS'].rsplit(" ", 1)
         else:
@@ -336,7 +311,6 @@ def create_excel(filepath, tasks, base_folder="", folder_column=False):
             else:
                 row.append("")
 
-        # images
         images = []
         if len(task['images']) > 0:
             for item in task['images']:
@@ -432,8 +406,6 @@ def check_token(deployment, subscriber_key):
                          {'session_id': session_id, 'subscriber_key': subscriber_key,
                           'download_token': download_token}).json()
 
-    print(response)
-
     if response['status'] == "ok":
         print(": OK")
         return True
@@ -460,7 +432,6 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
     start_log()
     log_and_print([f"SSS Downloader version {VERSION}"])
 
-    # output_folder = config_section_map("Download")['folder']
     log_and_print([f"Setting output folder: {_output_folder}"])
 
     create_folder(_output_folder)
@@ -503,7 +474,7 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                 print("Loading transaction list")
 
                 all_tasks = get_transactions(deployment, subscriber_key, _start_date.strftime("%d/%m/%Y"),
-                                             _end_date.strftime("%d/%m/%Y"), session_id, template_key, _customer_key)
+                                             _end_date.strftime("%d/%m/%Y"), session_id, _template_key, _customer_key)
 
                 if "all" in config_section_map("Data")['excel'].split(","):
                     if _excel_output:
@@ -533,7 +504,6 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                 else:
                     message = "Process done"
 
-                # delete
                 if _delete and len(all_tasks) > 0:
                     task_keys = [o['key'] for o in all_tasks]
                     task_keys = ",".join(task_keys)
@@ -548,11 +518,6 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                         _delete = False
                     else:
                         log_and_print(["Downloaded tasks and images will now be moved to the recycle bin"])
-                # else:
-                #     completed_tasks = 0
-                #     completed_images = 0
-                #     completed_size = 0
-                #     message = 'No photos downloaded'
                 end_log()
 
                 print()
@@ -574,21 +539,23 @@ def download_data(_output_folder, _start_date, _end_date, _template_key, _custom
                         'numTasks': completed_tasks,
                         'numImages': completed_images,
                         'numBytes': completed_size,
-                        'templateKey': template_key,
-                        'customerKey': customer_key,
+                        'templateKey': _template_key,
+                        'customerKey': _customer_key,
                         'tasksDeleted': _delete,
-                        'startDate': start_date,
-                        'endDate': end_date,
+                        'startDate': _start_date,
+                        'endDate': _end_date,
                         'version': VERSION,
                         'customer': "",
                         'template': ""}
 
                 http.post("https://%s.appspot.com/desktop/finished" % deployment, data)
 
+            else:
+                print("Error checking download token.")
         else:
-            print("error getting subscriber, please check the access code in the config file. Bye!")
+            print("Error getting subscriber, please check the access code in the config file.")
     else:
-        print("error getting domain, please check the access code in the config file. Bye!")
+        print("Error getting domain, please check the access code in the config file.")
 
 
 def get_download_setting(_args, _opts, opt, config_name, default):
@@ -599,8 +566,6 @@ def get_download_setting(_args, _opts, opt, config_name, default):
             output = _args[_opts.index(opt)].strip()
         except IndexError as e:
             print(f"Error reading command line arguments ({e})")
-        # else:
-        #     print(f"from command line: {output} ")
     if not output:
         if config_name in config_section_map("Download"):
             output = config_section_map("Download")[config_name]
@@ -621,59 +586,42 @@ def get_start_end_date(_args, _opts):
             if "-e" in opts:
                 _end_date = datetime.datetime.strptime(_args[_opts.index("-e")], "%Y%m%d").date()
             else:
-                print("Read start and end date from ")
                 _end_date = datetime.datetime.now().date()
 
         except IndexError:
             print("Error reading command line arguments)")
         except ValueError:
             print("Wrong date format")
-        else:
-            print(f"from command line: {_start_date} ")
     elif "-d" in opts:
-        # -d 0 means today
-        # -d 1 means yesterday
-        # -d 7 means 7 days ago
         try:
             _days_ago = _args[_opts.index("-d")]
         except IndexError:
             print("Error reading command line arguments)")
         else:
-            print(f"from command line: {_days_ago} ")
-            _end_date = datetime.datetime.now().date() - datetime.timedelta(days=int(_days_ago))  # yesterday
+            _end_date = datetime.datetime.now().date() - datetime.timedelta(days=int(_days_ago))
             _start_date = _end_date - datetime.timedelta(days=int(_days_ago))
     elif "-w" in opts:
-        # -w 0 means current week
-        # -w 1 means last week
         try:
             _weeks_ago = _args[_opts.index("-w")]
         except IndexError:
             print("Error reading command line arguments)")
         else:
-            print(f"from command line: {_weeks_ago} ")
-            # if w 0, then this week, that
             _start_date = (datetime.datetime.today() - datetime.timedelta(
                 days=datetime.datetime.today().isoweekday() % 7 + (7 * int(_weeks_ago)) - 1)).date()
             _end_date = _start_date + datetime.timedelta(days=6)
 
     elif "-m" in opts:
-        # -w 0 means current month
-        # -w 1 means last month
         try:
             _months_ago = _args[_opts.index("-m")]
         except IndexError:
             print("Error reading command line arguments)")
         else:
-            print(f"from command line: {_months_ago} ")
-            # if w 0, then this week, that
             _start_date = (datetime.datetime.today().replace(day=1) - relativedelta(months=int(_months_ago))).date()
             _end_date = _start_date.replace(day=monthrange(_start_date.year, _start_date.month)[1])
 
     if not _start_date:
-        # read from settings
         if "start_date" in config_section_map("Download"):
             _start_date = datetime.datetime.strptime(config_section_map("Download")["start_date"], "%d/%m/%Y").date()
-            # _start_date = datetime.datetime.strptime(_args[_opts.index("-e"), "%Y%m%d"])
             if "end_date" in config_section_map("Download"):
                 _end_date = datetime.datetime.strptime(config_section_map("Download")["end_date"], "%d/%m/%Y").date()
             else:
@@ -696,9 +644,6 @@ if __name__ == "__main__":
     opts = [opt for opt in sys.argv[1:] if opt.startswith("-")]
     args = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
 
-    print(opts)
-    print(args)
-
     if "-h" in opts:
         print("""Usage:
     python main.py -h:                  Shows this help message
@@ -715,7 +660,7 @@ if __name__ == "__main__":
     python main.py -m 2 --delete        Download two months ago data and move all downloaded tasks to SSS Recycle Bin
     python main.py -nophotos            Download Excel data only, skip photo download
     python main.py -output output.xlsx  Custom Excel output file name
-    python main.py -pdf              Enable PDF download for task
+    python main.py -pdf                 Enable PDF download for task
 
     """)
 
@@ -725,13 +670,9 @@ if __name__ == "__main__":
         show_customers()
 
     else:
-        # load settings
-        test = get_download_setting(args, opts, "-pdf", "download_pdf", "no").lower()
-        print(test)
         output_folder = get_download_setting(args, opts, "-f", "folder", "C:\\temp")
         template_key = get_download_setting(args, opts, "-t", "template_key", None)
         customer_key = get_download_setting(args, opts, "-c", "customer_key", None)
-        # download_pdf_setting = (get_download_setting(args, opts, "-pdf", "download_pdf", "no").lower() == "yes")
 
         no_photos = ("-nophotos" in opts)
         download_pdf_setting = "-pdf" in opts
